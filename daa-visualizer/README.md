@@ -1,16 +1,61 @@
-# React + Vite
+# DAA Visualizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An interactive web application that demonstrates **7 classic algorithms** through 6 real-world production-style tools. Built as a Design and Analysis of Algorithms (DAA) project.
 
-Currently, two official plugins are available:
+## Apps & Algorithms
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+| App | Tagline | Algorithm | Paradigm | Industry |
+|-----|---------|-----------|----------|----------|
+| NaviRoute | GPS Route Planner | Dijkstra's Algorithm | Greedy | Logistics / Maps |
+| PackSort | E-Commerce Order Sorter | Merge Sort + Quick Sort | Divide & Conquer | E-Commerce / Retail |
+| ZipIt | File Compression Engine | Huffman Coding | Greedy | Storage / Networking |
+| DiffScan | Code Diff Analyzer | Longest Common Subsequence | Dynamic Programming | DevTools / Version Control |
+| NetSpan | Fiber Network Planner | Kruskal's Algorithm | Greedy | Telecom / Infrastructure |
+| ShiftBoard | Conflict-Free Scheduler | N-Queens (Backtracking) | Backtracking | HR / Healthcare / Ops |
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Step-by-step algorithm visualization with play/pause controls
+- Algorithm trace log showing each step in real time
+- Dark-themed UI with per-app accent colors
+- Real-world context for each algorithm
 
-## Expanding the ESLint configuration
+## Tech Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- **React 19** — UI
+- **Vite 8** — Build tool & dev server
+- **Vanilla CSS-in-JS** — All styling inline, no external UI library
+
+## Getting Started
+
+```bash
+# Install dependencies
+cd daa-visualizer
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+```
+
+## Project Structure
+
+```
+daa-visualizer/
+├── src/
+│   ├── App.jsx        # All 6 app visualizers + shared UI components
+│   ├── App.css        # Global styles
+│   ├── main.jsx       # React entry point
+│   └── index.css      # Base styles
+├── public/
+├── index.html
+├── vite.config.js
+└── package.json
+```
+
+## Other Files
+
+- `DAAVisualizer.jsx` — Standalone single-file version of the visualizer
+- `#include <iostream>.cpp` — C++ reference implementations of the algorithms
