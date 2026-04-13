@@ -19,7 +19,7 @@ const T = {
 const APPS = [
   { id:"naviRoute",  name:"NaviRoute",    tagline:"GPS Route Planner",         algo:"Dijkstra's Algorithm",     paradigm:"Greedy",              icon:"🗺️",  accent:"#00c896", industry:"Logistics / Maps" },
   { id:"packSort",   name:"PackSort",     tagline:"E-Commerce Order Sorter",   algo:"Merge Sort",               paradigm:"Divide & Conquer",    icon:"📦",  accent:"#ff7d3b", industry:"E-Commerce / Retail" },
-  { id:"zipIt",      name:"ZipIt",        tagline:"File Compression Engine",   algo:"Huffman Coding",           paradigm:"Greedy",              icon:"🗜️",  accent:"#4d9fff", industry:"Storage / Networking" },
+  { id:"diffScan",   name:"DiffScan",     tagline:"Code Diff Analyzer",        algo:"Longest Common Subsequence",paradigm:"Dynamic Programming", icon:"🔍",  accent:"#bf7fff", industry:"DevTools / Version Control" },
   { id:"shiftBoard", name:"ShiftBoard",   tagline:"Conflict-Free Scheduler",   algo:"N-Queens (Backtracking)",  paradigm:"Backtracking",        icon:"🗓️",  accent:"#ff4d6d", industry:"HR / Healthcare / Ops" },
 ];
 
@@ -372,115 +372,256 @@ function PackSort({ accent="#ff7d3b" }) {
 }
 
 /* ════════════════════════════════════════════════
-   APP 3: ZipIt — Huffman File Compressor
+   APP 3: DiffScan — LCS Code Diff Analyzer
    ════════════════════════════════════════════════ */
-function buildHuffman(text) {
-  const freq={};
-  for(const c of text) freq[c]=(freq[c]||0)+1;
-  const steps=[];
-  let nodes=Object.entries(freq).map(([char,f])=>({char,freq:f,id:char,left:null,right:null}));
-  nodes.sort((a,b)=>a.freq-b.freq);
-  steps.push({ nodes:nodes.map(n=>({...n})), log:`Build priority queue: ${nodes.map(n=>`${n.char}(${n.freq})`).join(", ")}` });
-  let uid=0;
-  while(nodes.length>1) {
-    const l=nodes.shift(), r=nodes.shift();
-    const m={char:`[${l.char}+${r.char}]`,freq:l.freq+r.freq,id:`node_${uid++}`,left:l,right:r};
-    nodes.push(m); nodes.sort((a,b)=>a.freq-b.freq);
-    steps.push({ nodes:nodes.map(n=>({char:n.char,freq:n.freq})), merge:[l.char,r.char,m.freq], log:`Merge '${l.char}'(${l.freq}) + '${r.char}'(${r.freq}) → node(${m.freq})` });
-  }
-  const root=nodes[0]; const codes={};
-  function bc(node,code){ if(!node.left&&!node.right){codes[node.char]=code||"0";return;} if(node.left)bc(node.left,code+"0"); if(node.right)bc(node.right,code+"1"); }
-  bc(root,"");
-  const origBits=text.length*8;
-  const compBits=text.split("").reduce((s,c)=>s+codes[c].length,0);
-  const savings=Math.round((1-compBits/origBits)*100);
-  steps.push({ codes, origBits, compBits, savings, log:`Compression: ${origBits}b → ${compBits}b  (${savings}% saved)` });
-  return { steps, codes, origBits, compBits, savings };
+
+const DIFF_PRESETS = {
+  "JS Function": {
+    a: `function authenticate(user, pass) {\n  const hash = md5(pass);\n  if (db.find(user)) {\n    return hash === db.getHash(user);\n  }\n  return false;\n}\n\nmodule.exports = authenticate;`,
+    b: `async function authenticate(user, pass, mfa) {\n  const hash = bcrypt.hash(pass, 12);\n  const record = await db.findUser(user);\n  if (!record) return { ok: false, err: 'User not found' };\n  const valid = await bcrypt.compare(pass, record.hash);\n  if (valid && mfa) return verifyMFA(user, mfa);\n  return { ok: valid };\n}\n\nmodule.exports = { authenticate };`,
+    lang:"js"
+  },
+  "Python Class": {
+    a: `class Stack:\n    def __init__(self):\n        self.data = []\n\n    def push(self, val):\n        self.data.append(val)\n\n    def pop(self):\n        return self.data.pop()\n\n    def size(self):\n        return len(self.data)`,
+    b: `class Stack:\n    def __init__(self, limit=None):\n        self.data = []\n        self.limit = limit\n\n    def push(self, val):\n        if self.limit and len(self.data) >= self.limit:\n            raise OverflowError("Stack is full")\n        self.data.append(val)\n\n    def pop(self):\n        if not self.data:\n            raise IndexError("Stack is empty")\n        return self.data.pop()\n\n    def peek(self):\n        return self.data[-1] if self.data else None\n\n    def size(self):\n        return len(self.data)`,
+    lang:"py"
+  },
+  "JSON Config": {
+    a: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "port": 3000,\n  "database": {\n    "host": "localhost",\n    "port": 5432\n  },\n  "debug": true\n}`,
+    b: `{\n  "name": "my-app",\n  "version": "2.0.0",\n  "port": 8080,\n  "database": {\n    "host": "db.prod.internal",\n    "port": 5432,\n    "pool": 10,\n    "ssl": true\n  },\n  "redis": { "host": "cache.internal" },\n  "debug": false,\n  "logLevel": "warn"\n}`,
+    lang:"json"
+  },
+};
+
+const KEYWORDS = { js:["function","async","await","const","let","var","return","if","else","true","false","null","undefined","class","new","import","export","module"], py:["def","class","return","if","elif","else","import","from","True","False","None","raise","self","not","and","or","in"], json:[], css:[] };
+
+function syntaxColor(line, lang) {
+  if(!lang||lang==="json") return [{ text:line, color:"#c9d1d9" }];
+  const kws = KEYWORDS[lang]||[];
+  const parts = [];
+  let remaining = line;
+  const commentChar = lang==="py"?"#":"//";
+  if(remaining.trimStart().startsWith(commentChar)){ return [{ text:remaining, color:"#6a9955" }]; }
+  const strMatch = remaining.match(/(['"`]).*?\1/);
+  if(strMatch){ const idx=remaining.indexOf(strMatch[0]); if(idx>0) parts.push({text:remaining.slice(0,idx),color:"#c9d1d9"}); parts.push({text:strMatch[0],color:"#ce9178"}); remaining=remaining.slice(idx+strMatch[0].length); }
+  const words = remaining.split(/(\s+|[(){},.:;=<>!+\-*/[\]])/);
+  for(const w of words){ if(kws.includes(w.trim())) parts.push({text:w,color:"#569cd6"}); else if(/^\d+$/.test(w.trim())) parts.push({text:w,color:"#b5cea8"}); else parts.push({text:w,color:"#c9d1d9"}); }
+  return parts;
 }
 
-function ZipIt({ accent="#4d9fff" }) {
-  const [text,setText]=useState("HELLO WORLD THIS IS HUFFMAN CODING COMPRESSION");
-  const [result,setResult]=useState(null);
-  const [mode,setMode]=useState("compress");
+function computeLCS(A, B) {
+  const m=A.length, n=B.length;
+  const dp=Array(m+1).fill(null).map(()=>Array(n+1).fill(0));
+  const steps=[];
+  for(let i=1;i<=m;i++) for(let j=1;j<=n;j++) {
+    if(A[i-1]===B[j-1]){ dp[i][j]=dp[i-1][j-1]+1;
+      steps.push({ dp:dp.map(r=>[...r]),i,j,match:true, log:`Match line ${i} = line ${j}: "${A[i-1].trim().slice(0,40)}"` });
+    } else { dp[i][j]=Math.max(dp[i-1][j],dp[i][j-1]);
+      steps.push({ dp:dp.map(r=>[...r]),i,j,match:false, log:`No match: dp[${i}][${j}] = max(${dp[i-1][j]},${dp[i][j-1]}) = ${dp[i][j]}` });
+    }
+  }
+  let i=m,j=n; const lcs=[];
+  while(i>0&&j>0){ if(A[i-1]===B[j-1]){lcs.unshift(A[i-1]);i--;j--;} else if(dp[i-1][j]>dp[i][j-1])i--; else j--; }
+  const adds=B.filter(x=>!lcs.includes(x)).length;
+  const dels=A.filter(x=>!lcs.includes(x)).length;
+  const similarity=Math.round((lcs.length*2/(A.length+B.length))*100);
+  steps.push({ dp:dp.map(r=>[...r]),done:true, log:`✅ LCS=${dp[m][n]} lines. +${adds} added  -${dels} removed  ~${similarity}% similar` });
+  return { steps, lcs, dp, adds, dels, similarity, lcsLen:dp[m][n] };
+}
 
-  const run=()=>{
-    if(text.length<2||text.length>80){alert("2–80 chars"); return;}
-    setResult(buildHuffman(text.toUpperCase()));
+function buildUnifiedDiff(A, B, lcs) {
+  const diff=[]; let ai=0,bi=0,li=0;
+  while(ai<A.length||bi<B.length){
+    if(li<lcs.length&&ai<A.length&&A[ai]===lcs[li]&&bi<B.length&&B[bi]===lcs[li]){ diff.push({type:"same",a:A[ai],b:B[bi],aln:ai+1,bln:bi+1}); ai++;bi++;li++; }
+    else if(bi<B.length&&(li>=lcs.length||B[bi]!==lcs[li])){ diff.push({type:"add",b:B[bi],bln:bi+1}); bi++; }
+    else if(ai<A.length){ diff.push({type:"del",a:A[ai],aln:ai+1}); ai++; }
+    else bi++;
+  }
+  return diff;
+}
+
+function SyntaxLine({ text, lang, color }) {
+  const parts = syntaxColor(text, lang);
+  return <span style={{ color }}>{parts.map((p,i)=><span key={i} style={{ color:color||p.color }}>{p.text}</span>)}</span>;
+}
+
+function DiffScan({ accent="#bf7fff" }) {
+  const [preset, setPreset] = useState("JS Function");
+  const [v1, setV1] = useState(DIFF_PRESETS["JS Function"].a);
+  const [v2, setV2] = useState(DIFF_PRESETS["JS Function"].b);
+  const [lang, setLang] = useState("js");
+  const [result, setResult] = useState(null);
+  const [tab, setTab] = useState("diff");
+  const [diffMode, setDiffMode] = useState("unified");
+  const p = usePlayer(result?.steps?.length||1);
+
+  const loadPreset = (name) => {
+    const pr = DIFF_PRESETS[name];
+    setPreset(name); setV1(pr.a); setV2(pr.b); setLang(pr.lang); setResult(null);
   };
-  const last=result?.steps?.[result.steps.length-1];
+
+  const run = () => {
+    const A=v1.split("\n"), B=v2.split("\n");
+    if(A.length>20||B.length>20){ alert("Keep files ≤ 20 lines for DP table clarity"); return; }
+    const r=computeLCS(A,B); setResult(r); setTab("diff"); p.reset();
+  };
+
+  const A = v1.split("\n"), B = v2.split("\n");
+  const diff = result ? buildUnifiedDiff(A, B, result.lcs) : [];
+  const step = result?.steps?.[p.idx];
+
+  const adds=diff.filter(d=>d.type==="add").length;
+  const dels=diff.filter(d=>d.type==="del").length;
+  const same=diff.filter(d=>d.type==="same").length;
+  const sim=result?.similarity||0;
+
+  const lineStyle=(type)=>({
+    display:"flex", gap:0, fontFamily:"'DM Mono',monospace", fontSize:11.5, lineHeight:"20px",
+    background:type==="add"?"#0d2a1a":type==="del"?"#2a0d0d":"transparent",
+    borderLeft:`3px solid ${type==="add"?"#2ea04326":type==="del"?"#f8514926":"transparent"}`,
+  });
 
   return (
     <div>
-      <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-        {["compress","codes","analysis"].map(m=>(
-          <button key={m} onClick={()=>setMode(m)} style={{ ...btnBase, padding:"6px 14px", fontSize:12, textTransform:"capitalize",
-            background: mode===m?`${accent}22`:T.dim, color: mode===m?accent:T.sub,
-            border: `1px solid ${mode===m?accent+"55":T.border}` }}>{m}</button>
+      <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
+        <select value={preset} onChange={e=>loadPreset(e.target.value)}
+          style={{ ...input_s, width:"auto", flex:1, minWidth:140, fontSize:12 }}>
+          {Object.keys(DIFF_PRESETS).map(k=><option key={k}>{k}</option>)}
+        </select>
+        <div style={{ display:"flex", background:T.dim, borderRadius:8, overflow:"hidden", border:`1px solid ${T.border}`, flexShrink:0 }}>
+          {["unified","split"].map(m=>(
+            <button key={m} onClick={()=>setDiffMode(m)} style={{ ...btnBase, padding:"7px 14px", fontSize:11, borderRadius:0, textTransform:"capitalize",
+              background:diffMode===m?`${accent}22`:"transparent", color:diffMode===m?accent:T.sub, border:"none" }}>{m}</button>
+          ))}
+        </div>
+        <button onClick={run} style={{ ...btnBase, background:accent, color:"#fff", padding:"8px 18px", flexShrink:0 }}>🔍 Compare</button>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
+        {[["Version A — Before",v1,setV1,"#ff4d6d"],["Version B — After",v2,setV2,"#00c896"]].map(([label,val,set,lc])=>(
+          <div key={label}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 12px", background:T.dim, borderRadius:"8px 8px 0 0", border:`1px solid ${T.border}`, borderBottom:"none" }}>
+              <div style={{ width:8, height:8, borderRadius:"50%", background:lc }}/>
+              <span style={{ fontSize:11, color:T.sub, fontFamily:"'DM Mono',monospace" }}>{label}</span>
+            </div>
+            <textarea value={val} onChange={e=>set(e.target.value)}
+              style={{ ...input_s, height:130, resize:"vertical", fontFamily:"'DM Mono',monospace", fontSize:11, lineHeight:1.6, borderRadius:"0 0 8px 8px", borderTop:"none" }}/>
+          </div>
         ))}
       </div>
 
-      {mode==="compress"&&(
-        <>
-          <div style={{ marginBottom:10 }}>
-            <div style={{ fontSize:12, color:T.sub, marginBottom:6 }}>Input text / file content</div>
-            <textarea value={text} onChange={e=>setText(e.target.value.toUpperCase())} maxLength={80}
-              style={{ ...input_s, height:80, resize:"vertical", fontFamily:"'DM Mono',monospace", fontSize:12 }}/>
-            <div style={{ fontSize:11, color:T.sub, textAlign:"right" }}>{text.length}/80 chars</div>
-          </div>
-          <button onClick={run} style={{ ...btnBase, background:accent, color:"#fff", width:"100%", marginBottom:14, fontSize:14 }}>
-            🗜️ Compress File
-          </button>
-          {result&&last?.savings!==undefined&&(
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8 }}>
-              {[
-                ["Original",`${last.origBits} bits`,"📄",T.sub],
-                ["Compressed",`${last.compBits} bits`,accent,accent],
-                ["Savings",`${last.savings}%`,"💾","#00c896"],
-              ].map(([l,v,ic,c])=>(
-                <div key={l} style={{ padding:14, background:T.dim, borderRadius:10, textAlign:"center" }}>
-                  <div style={{ fontSize:11, color:T.sub, marginBottom:6 }}>{l}</div>
-                  <div style={{ fontSize:20, fontWeight:800, color:c }}>{v}</div>
-                </div>
-              ))}
+      {result&&(
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:6, marginBottom:12 }}>
+          {[
+            ["Unchanged",same,"#4a4a6a","≡"],
+            ["Added",adds,"#2ea043","+"],
+            ["Removed",dels,"#f85149","−"],
+            ["LCS Length",result.lcsLen,accent,"∩"],
+            ["Similarity",`${sim}%`,sim>=70?"#2ea043":sim>=40?"#ffcc44":"#f85149","~"],
+          ].map(([l,v,c,sym])=>(
+            <div key={l} style={{ padding:"10px 8px", background:`${c}12`, border:`1px solid ${c}30`, borderRadius:8, textAlign:"center" }}>
+              <div style={{ fontSize:16, fontWeight:800, color:c, fontFamily:"'DM Mono',monospace" }}>{sym}{v}</div>
+              <div style={{ fontSize:10, color:T.sub, marginTop:2 }}>{l}</div>
             </div>
-          )}
-        </>
-      )}
-      {mode==="codes"&&result&&(
-        <>
-          <div style={{ fontSize:12, color:T.sub, marginBottom:10 }}>Huffman codes — shorter codes = more frequent character</div>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))", gap:8 }}>
-            {Object.entries(result.codes).sort((a,b)=>a[1].length-b[1].length).map(([ch,code])=>(
-              <div key={ch} style={{ padding:"10px 12px", background:T.dim, borderRadius:8, textAlign:"center" }}>
-                <div style={{ fontSize:22, color:T.text, fontWeight:700 }}>'{ch}'</div>
-                <div style={{ fontSize:10, color:T.sub }}>×{text.split("").filter(c=>c===ch).length}</div>
-                <div style={{ fontSize:12, color:accent, fontFamily:"'DM Mono',monospace", marginTop:4 }}>{code}</div>
-                <div style={{ fontSize:10, color:T.sub }}>{code.length} bits</div>
-              </div>
-            ))}
-          </div>
-          <Divider/>
-          <div style={{ fontSize:12, fontFamily:"'DM Mono',monospace", color:T.sub, wordBreak:"break-all", lineHeight:1.8 }}>
-            <div style={{ color:T.sub, marginBottom:4 }}>Encoded stream:</div>
-            <div style={{ color:accent, background:"#0a0a0f", padding:10, borderRadius:8 }}>
-              {text.split("").map((c,i)=><span key={i} style={{ marginRight:1 }}>{result.codes[c]||""}</span>)}
-            </div>
-          </div>
-        </>
-      )}
-      {mode==="analysis"&&result&&(
-        <div>
-          <div style={{ fontSize:12, color:T.sub, marginBottom:10 }}>Step-by-step tree construction</div>
-          <div style={{ maxHeight:300, overflowY:"auto" }}>
-            {result.steps.map((s,i)=>(
-              <div key={i} style={{ padding:"8px 10px", background: i===result.steps.length-1?`${accent}10`:T.dim,
-                border:`1px solid ${i===result.steps.length-1?accent+"33":T.border}`, borderRadius:6, marginBottom:6,
-                fontSize:12, fontFamily:"'DM Mono',monospace", color:"#8888aa" }}>
-                <span style={{ color:accent }}>#{i+1} </span>{s.log}
-              </div>
-            ))}
-          </div>
+          ))}
         </div>
+      )}
+
+      {result&&(
+        <>
+          <div style={{ display:"flex", gap:4, marginBottom:0, borderBottom:`1px solid ${T.border}` }}>
+            {[["diff","📄 Diff View"],["dp","🧬 DP Table"],["log","📋 Trace Log"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setTab(id)} style={{ ...btnBase, padding:"8px 14px", fontSize:12, borderRadius:"6px 6px 0 0", border:`1px solid ${tab===id?T.border:"transparent"}`, borderBottom:`1px solid ${tab===id?T.card:"transparent"}`, marginBottom:-1, background:tab===id?T.card:"transparent", color:tab===id?accent:T.sub }}>{label}</button>
+            ))}
+          </div>
+
+          <div style={{ background:"#080810", border:`1px solid ${T.border}`, borderTop:"none", borderRadius:"0 8px 8px 8px", overflow:"hidden" }}>
+            {tab==="diff"&&diffMode==="unified"&&(
+              <div style={{ maxHeight:360, overflowY:"auto" }}>
+                <div style={{ display:"flex", gap:16, padding:"6px 14px", background:"#0d0d18", borderBottom:`1px solid ${T.border}`, fontSize:11, color:T.sub, fontFamily:"'DM Mono',monospace" }}>
+                  <span style={{ color:"#f85149" }}>--- a/file.{lang}</span>
+                  <span style={{ color:"#2ea043" }}>+++ b/file.{lang}</span>
+                </div>
+                {diff.map((d,i)=>(
+                  <div key={i} style={lineStyle(d.type)}>
+                    <span style={{ width:40, flexShrink:0, color:"#3a3a5a", padding:"0 8px", textAlign:"right", userSelect:"none", borderRight:`1px solid ${T.border}`, fontSize:10 }}>{d.aln||""}</span>
+                    <span style={{ width:40, flexShrink:0, color:"#3a3a5a", padding:"0 8px", textAlign:"right", userSelect:"none", borderRight:`1px solid ${T.border}`, fontSize:10 }}>{d.bln||""}</span>
+                    <span style={{ width:16, flexShrink:0, padding:"0 4px", color:d.type==="add"?"#2ea043":d.type==="del"?"#f85149":"#3a3a5a", fontWeight:700 }}>{d.type==="add"?"+":d.type==="del"?"−":" "}</span>
+                    <span style={{ padding:"0 8px", color:d.type==="add"?"#7ee787":d.type==="del"?"#ff7b72":"#8b949e", flex:1 }}>
+                      <SyntaxLine text={d.a||d.b||""} lang={lang} color={d.type==="add"?"#7ee787":d.type==="del"?"#ff7b72":null}/>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab==="diff"&&diffMode==="split"&&(
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", maxHeight:360, overflowY:"auto" }}>
+                <div style={{ borderRight:`1px solid ${T.border}` }}>
+                  <div style={{ padding:"5px 12px", background:"#0d0d18", borderBottom:`1px solid ${T.border}`, fontSize:10, color:"#f85149", fontFamily:"'DM Mono',monospace" }}>a/file.{lang}</div>
+                  {diff.filter(d=>d.type!=="add").map((d,i)=>(
+                    <div key={i} style={{ ...lineStyle(d.type==="del"?"del":"same"), padding:"0" }}>
+                      <span style={{ width:32, flexShrink:0, padding:"0 6px", textAlign:"right", color:"#3a3a5a", fontSize:10, borderRight:`1px solid ${T.border}`, userSelect:"none" }}>{d.aln}</span>
+                      <span style={{ padding:"0 8px", fontSize:11.5, color:d.type==="del"?"#ff7b72":"#8b949e", flex:1, fontFamily:"'DM Mono',monospace" }}>{d.a||""}</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ padding:"5px 12px", background:"#0d0d18", borderBottom:`1px solid ${T.border}`, fontSize:10, color:"#2ea043", fontFamily:"'DM Mono',monospace" }}>b/file.{lang}</div>
+                  {diff.filter(d=>d.type!=="del").map((d,i)=>(
+                    <div key={i} style={{ ...lineStyle(d.type==="add"?"add":"same"), padding:"0" }}>
+                      <span style={{ width:32, flexShrink:0, padding:"0 6px", textAlign:"right", color:"#3a3a5a", fontSize:10, borderRight:`1px solid ${T.border}`, userSelect:"none" }}>{d.bln}</span>
+                      <span style={{ padding:"0 8px", fontSize:11.5, color:d.type==="add"?"#7ee787":"#8b949e", flex:1, fontFamily:"'DM Mono',monospace" }}>{d.b||""}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab==="dp"&&(
+              <div style={{ padding:12 }}>
+                <div style={{ fontSize:12, color:T.sub, marginBottom:10, fontFamily:"'DM Mono',monospace" }}>
+                  DP table — dp[i][j] = LCS length of A[0..i] and B[0..j]
+                </div>
+                <PlayerBar idx={p.idx} total={result.steps.length} playing={p.playing} onPlay={()=>p.setPlaying(x=>!x)} onPrev={p.prev} onNext={p.next} onReset={p.reset} accent={accent}/>
+                <div style={{ marginTop:12, overflowX:"auto" }}>
+                  <table style={{ borderCollapse:"collapse", fontSize:11, fontFamily:"'DM Mono',monospace" }}>
+                    <thead>
+                      <tr>
+                        <td style={{ padding:"4px 6px", color:T.sub, minWidth:28, textAlign:"center" }}/>
+                        <td style={{ padding:"4px 6px", color:"#6a6a8a", textAlign:"center", borderBottom:`1px solid ${T.border}` }}>""</td>
+                        {B.map((line,j)=><td key={j} style={{ padding:"2px 6px", color:"#2ea043", textAlign:"center", maxWidth:80, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:9, borderBottom:`1px solid ${T.border}` }}>{line.trim().slice(0,12)}</td>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(step?.dp||[]).map((row,i)=>(
+                        <tr key={i}>
+                          <td style={{ padding:"2px 8px", color:"#f85149", fontSize:9, maxWidth:80, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", borderRight:`1px solid ${T.border}` }}>{i===0?'""':A[i-1]?.trim().slice(0,12)}</td>
+                          {row.map((v,j)=>{
+                            const active=step&&!step.done&&step.i===i&&step.j===j;
+                            const match=active&&step.match;
+                            return <td key={j} style={{ padding:"3px 6px", textAlign:"center", minWidth:26, height:22,
+                              background:match?`${accent}44`:active?`${accent}22`:v>0?"#1a1a2a":"transparent",
+                              border:`1px solid ${active?accent:T.border}`,
+                              color:match?accent:active?`${accent}aa`:v>0?"#6b6baa":T.dim,
+                              fontWeight:active||v>0?"700":"400", borderRadius:3, transition:"all .15s" }}>{v}</td>;
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {step&&<div style={{ marginTop:10, padding:"8px 12px", background:step.match?`${accent}15`:"#1a1a2a", border:`1px solid ${step.match?accent:T.border}`, borderRadius:6, fontSize:12, color:step.match?accent:"#8b949e", fontFamily:"'DM Mono',monospace" }}>{step.log}</div>}
+              </div>
+            )}
+
+            {tab==="log"&&(
+              <div style={{ maxHeight:360, overflowY:"auto", padding:12 }}>
+                <StepLog steps={result.steps} curIdx={result.steps.length-1} accent={accent}/>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -598,7 +739,7 @@ function ShiftBoard({ accent="#ff4d6d" }) {
 /* ════════════════════════════════════════════════
    APP SHELL — wraps each app in its full-page UI
    ════════════════════════════════════════════════ */
-const APP_COMPONENTS = { naviRoute:NaviRoute, packSort:PackSort, zipIt:ZipIt, shiftBoard:ShiftBoard };
+const APP_COMPONENTS = { naviRoute:NaviRoute, packSort:PackSort, diffScan:DiffScan, shiftBoard:ShiftBoard };
 
 function AppShell({ app, onBack }) {
   const Comp = APP_COMPONENTS[app.id];
@@ -648,7 +789,7 @@ function RealWorldInfo({ appId, accent }) {
   const info = {
     naviRoute: { who:"Google Maps, Apple Maps, Uber, Ola", why:"Every time you request a route, Dijkstra (or its variant A*) explores roads greedily, always expanding the nearest unvisited city first.", impact:"Powers 1B+ daily navigation requests globally." },
     packSort:  { who:"Amazon, Flipkart, Meesho, Zomato", why:"Warehouses sort thousands of orders every minute by priority, delivery zone, or value. Merge Sort is preferred for stability — equal priorities keep their original order.", impact:"Reduces dispatch time by ~40% vs unsorted queues." },
-    zipIt:     { who:"WinZip, 7-Zip, HTTP gzip, PNG/JPEG, MP3", why:"Huffman coding is the base of most compression. PNG uses it for lossless pixel compression; MP3 uses a variant for audio.", impact:"Saves PBs of storage and bandwidth daily." },
+    diffScan:  { who:"Git, GitHub, VS Code, Gerrit, Bitbucket", why:"LCS finds lines that stayed identical. Additions (+) and deletions (−) are everything outside the LCS. Unified & split views mirror exactly how GitHub renders PRs.", impact:"Every git diff, PR review and merge conflict resolution worldwide." },
     shiftBoard:{ who:"Hospitals, Factories, Airlines, Call Centers", why:"N-Queens models the constraint that no two staff with the same specialty share the same shift. Backtracking explores all valid assignments.", impact:"Reduces scheduling conflicts in 24×7 operations." },
   };
   const d = info[appId];
@@ -666,7 +807,7 @@ function AlgoInfo({ appId, accent }) {
   const info = {
     naviRoute:  { time:"O((V+E) log V)", space:"O(V)", paradigm:"Greedy", note:"Uses min-heap for O(log V) extractions" },
     packSort:   { time:"O(n log n)", space:"O(n)", paradigm:"Divide & Conquer", note:"Stable sort — preserves equal-priority order" },
-    zipIt:      { time:"O(n log n)", space:"O(n)", paradigm:"Greedy", note:"Provably optimal prefix-free code lengths" },
+    diffScan:   { time:"O(mn)", space:"O(mn)", paradigm:"Dynamic Programming", note:"Optimal substructure: LCS(X,Y) = LCS(X-1,Y-1)+1 on match" },
     shiftBoard: { time:"O(n!)", space:"O(n)", paradigm:"Backtracking", note:"Constraint propagation prunes most branches early" },
   };
   const d = info[appId];
@@ -718,7 +859,8 @@ function Home({ onOpen }) {
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12 }}>
           {[
             { name:"Divide & Conquer", desc:"Split → Solve → Combine", app:"PackSort (Merge Sort)", color:"#ff7d3b" },
-            { name:"Greedy", desc:"Local optimal at each step", app:"NaviRoute, ZipIt", color:"#00c896" },
+            { name:"Greedy", desc:"Local optimal at each step", app:"NaviRoute", color:"#00c896" },
+            { name:"Dynamic Programming", desc:"Store & reuse subresults", app:"DiffScan (LCS)", color:"#bf7fff" },
             { name:"Backtracking", desc:"Try → Fail → Undo → Retry", app:"ShiftBoard (N-Queens)", color:"#ff4d6d" },
           ].map(p=>(
             <div key={p.name} style={{ padding:14, background:T.bg, borderRadius:10, border:`1px solid ${p.color}22` }}>
